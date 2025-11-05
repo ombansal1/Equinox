@@ -4,10 +4,11 @@ from datetime import datetime, timedelta
 from flask import Flask, render_template, jsonify, request, redirect, url_for
 import praw
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+from ingest import scrape_subreddits, load_cached_df  # Therapist/admin dataset
 from aura import analyze_aura
-from nlp_bert import analyze_emotions  # NEW IMPORT
+from nlp_bert import analyze_emotions  # BERT-based emotion analysis (radar)
 
-# --- CONFIG: Replace with your Reddit credentials ---
+# --- CONFIG ---
 REDDIT_CLIENT_ID = "M1I1jvc74xBb2xr-QuK2zQ"
 REDDIT_CLIENT_SECRET = "qSFZqF4lbrk5kZ9q3UP44n0RMBHrig"
 REDDIT_USER_AGENT = "wellness-tracker-demo"
@@ -15,7 +16,7 @@ REDDIT_USER_AGENT = "wellness-tracker-demo"
 # --- APP INIT ---
 app = Flask(__name__)
 analyzer = SentimentIntensityAnalyzer()
-user_posts = {}  # in-memory store: username -> list of posts
+user_posts = {}  # In-memory user posts
 
 # --- Reddit Init ---
 def init_reddit():
@@ -25,7 +26,7 @@ def init_reddit():
         user_agent=REDDIT_USER_AGENT,
     )
 
-# --- Preprocess Text for VADER ---
+# --- Text Preprocessing ---
 def preprocess_text(text: str) -> str:
     if not text:
         return ""
@@ -35,7 +36,7 @@ def preprocess_text(text: str) -> str:
     text = re.sub(r"\s+", " ", text).strip()
     return text
 
-# --- Fetch only submissions ---
+# --- Fetch Reddit Posts for a Specific User ---
 def fetch_user_submissions(username, limit=100):
     reddit = init_reddit()
     ruser = reddit.redditor(username)
@@ -68,7 +69,7 @@ def analyze_posts(posts):
         })
     return results
 
-# --- Aggregate daily mood ---
+# --- Aggregate Daily Mood ---
 def get_daily_mood(username, days=60):
     posts = user_posts.get(username, [])
     if not posts:
@@ -87,7 +88,7 @@ def get_daily_mood(username, days=60):
     ]
     return trend
 
-# --- Generate alerts if compound score < threshold ---
+# --- Generate Alerts ---
 def get_alerts(username, threshold=-0.5):
     trend = get_daily_mood(username, days=60)
     alerts = []
@@ -131,10 +132,13 @@ def api_aura(username):
             posts = fetch_user_submissions(username, limit=50)
         except Exception as e:
             return jsonify({"error": f"Unable to fetch posts: {str(e)}"})
-    aura_result = analyze_aura(posts)
-    return jsonify(aura_result)
+    try:
+        aura_result = analyze_aura(posts)
+        return jsonify(aura_result)
+    except Exception as e:
+        return jsonify({"error": f"Aura analysis failed: {str(e)}"})
 
-@app.route("/api/emotions/<username>")  # NEW
+@app.route("/api/emotions/<username>")  # BERT-based weekly emotion distribution
 def api_emotions(username):
     posts = user_posts.get(username)
     if not posts:
@@ -142,8 +146,57 @@ def api_emotions(username):
             posts = fetch_user_submissions(username, limit=50)
         except Exception as e:
             return jsonify({"error": f"Unable to fetch posts: {str(e)}"})
-    result = analyze_emotions(posts)
-    return jsonify(result)
+    try:
+        result = analyze_emotions(posts)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": f"Emotion analysis failed: {str(e)}"})
+
+# --- ADMIN (THERAPIST) ENDPOINTS ---
+@app.route("/api/admin/scrape")
+def admin_scrape():
+    """
+    Scrape multiple subreddits deeply (top, hot, new, rising)
+    and cache the dataset for therapist analytics.
+    """
+    subs = request.args.get("subs")
+    sub_list = [s.strip() for s in subs.split(",")] if subs else None
+    posts_per_sub = int(request.args.get("limit", 1000))  # default 1000 posts/subreddit
+
+    try:
+        reddit = init_reddit()
+        df, json_path, csv_path = scrape_subreddits(
+            reddit,
+            subreddits=sub_list,
+            posts_per_sub=posts_per_sub
+        )
+        return jsonify({
+            "ok": True,
+            "rows": int(len(df)),
+            "json_cache": json_path,
+            "csv_cache": csv_path
+        })
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+@app.route("/api/admin/users")
+def admin_users():
+    """
+    Loads cached Reddit data and returns top users by number of posts.
+    This will power the therapist dashboard later.
+    """
+    df = load_cached_df()
+    if df.empty:
+        return jsonify({
+            "users": [],
+            "rows": 0,
+            "note": "Cache empty. Run /api/admin/scrape first."
+        })
+
+    vc = df["author"].fillna("[deleted]").value_counts().reset_index()
+    vc.columns = ["author", "posts"]
+    users = vc.head(50).to_dict("records")
+    return jsonify({"users": users, "rows": int(len(df))})
 
 # --- RUN APP ---
 if __name__ == "__main__":
