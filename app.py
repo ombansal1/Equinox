@@ -5,7 +5,6 @@ from flask import Flask, render_template, jsonify, request, redirect, url_for
 import praw
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 from aura import analyze_aura
-from forecasting import forecast_mood  # NEW
 
 # --- CONFIG: Replace with your Reddit credentials ---
 REDDIT_CLIENT_ID = "M1I1jvc74xBb2xr-QuK2zQ"
@@ -120,13 +119,6 @@ def api_aura(username):
     if not aura_info:
         return jsonify({"error": "Not enough data"})
     return jsonify(aura_info)
-
-# --- NEW: Forecast Route ---
-@app.route("/api/forecast/<username>")
-def api_forecast(username):
-    daily_mood = get_daily_mood(username, days=60)
-    forecast_data = forecast_mood(daily_mood)
-    return jsonify(forecast_data)
 
 # --- RUN ---
 if __name__ == "__main__":
