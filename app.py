@@ -5,6 +5,7 @@ from flask import Flask, render_template, jsonify, request, redirect, url_for
 import praw
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 from aura import analyze_aura
+from nlp_bert import analyze_emotions  # NEW IMPORT
 
 # --- CONFIG: Replace with your Reddit credentials ---
 REDDIT_CLIENT_ID = "M1I1jvc74xBb2xr-QuK2zQ"
@@ -14,7 +15,7 @@ REDDIT_USER_AGENT = "wellness-tracker-demo"
 # --- APP INIT ---
 app = Flask(__name__)
 analyzer = SentimentIntensityAnalyzer()
-user_posts = {}  # in-memory store
+user_posts = {}  # in-memory store: username -> list of posts
 
 # --- Reddit Init ---
 def init_reddit():
@@ -24,7 +25,7 @@ def init_reddit():
         user_agent=REDDIT_USER_AGENT,
     )
 
-# --- Preprocess ---
+# --- Preprocess Text for VADER ---
 def preprocess_text(text: str) -> str:
     if not text:
         return ""
@@ -34,7 +35,7 @@ def preprocess_text(text: str) -> str:
     text = re.sub(r"\s+", " ", text).strip()
     return text
 
-# --- Fetch posts ---
+# --- Fetch only submissions ---
 def fetch_user_submissions(username, limit=100):
     reddit = init_reddit()
     ruser = reddit.redditor(username)
@@ -61,10 +62,13 @@ def analyze_posts(posts):
             "title": p["title"],
             "created": p["created"],
             "compound": scores["compound"],
+            "pos": scores["pos"],
+            "neg": scores["neg"],
+            "neu": scores["neu"],
         })
     return results
 
-# --- Daily Mood ---
+# --- Aggregate daily mood ---
 def get_daily_mood(username, days=60):
     posts = user_posts.get(username, [])
     if not posts:
@@ -77,13 +81,20 @@ def get_daily_mood(username, days=60):
             continue
         d = a["created"].date().isoformat()
         buckets.setdefault(d, []).append(a["compound"])
-    trend = [{"date": d, "avg_compound": sum(vals)/len(vals)} for d, vals in sorted(buckets.items())]
+    trend = [
+        {"date": d, "avg_compound": sum(vals)/len(vals)}
+        for d, vals in sorted(buckets.items())
+    ]
     return trend
 
-# --- Alerts ---
+# --- Generate alerts if compound score < threshold ---
 def get_alerts(username, threshold=-0.5):
     trend = get_daily_mood(username, days=60)
-    return [{"date": t["date"], "message": "Significant drop in mood"} for t in trend if t["avg_compound"] < threshold]
+    alerts = []
+    for t in trend:
+        if t["avg_compound"] < threshold:
+            alerts.append({"date": t["date"], "message": "Significant drop in mood"})
+    return alerts
 
 # --- ROUTES ---
 @app.route("/")
@@ -114,12 +125,26 @@ def api_mood(username):
 
 @app.route("/api/aura/<username>")
 def api_aura(username):
-    posts = user_posts.get(username, [])
-    aura_info = analyze_aura(posts)
-    if not aura_info:
-        return jsonify({"error": "Not enough data"})
-    return jsonify(aura_info)
+    posts = user_posts.get(username)
+    if not posts:
+        try:
+            posts = fetch_user_submissions(username, limit=50)
+        except Exception as e:
+            return jsonify({"error": f"Unable to fetch posts: {str(e)}"})
+    aura_result = analyze_aura(posts)
+    return jsonify(aura_result)
 
-# --- RUN ---
+@app.route("/api/emotions/<username>")  # NEW
+def api_emotions(username):
+    posts = user_posts.get(username)
+    if not posts:
+        try:
+            posts = fetch_user_submissions(username, limit=50)
+        except Exception as e:
+            return jsonify({"error": f"Unable to fetch posts: {str(e)}"})
+    result = analyze_emotions(posts)
+    return jsonify(result)
+
+# --- RUN APP ---
 if __name__ == "__main__":
     app.run(debug=True)

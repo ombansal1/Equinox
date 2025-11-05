@@ -30,8 +30,6 @@
       font-size: 14px;
       color: #A0A0A0;
     }
-
-    /* ===== Cards ===== */
     .chart-card {
       background: #1E1E1E;
       border-radius: 10px;
@@ -44,8 +42,6 @@
       border-radius: 8px;
       padding: 10px;
     }
-
-    /* ===== Aura Card ===== */
     .aura-card {
       background: radial-gradient(circle at top left, #40e0d0, #1e1e1e);
       border-radius: 15px;
@@ -59,14 +55,6 @@
     }
     .aura-card p {
       color: #E0E0E0;
-    }
-
-    /* Forecast message */
-    #forecast-message {
-      margin-top: 15px;
-      text-align: center;
-      font-size: 16px;
-      color: #40E0D0;
     }
   </style>
 </head>
@@ -91,11 +79,10 @@
     <canvas id="moodChart" width="800" height="300"></canvas>
   </div>
 
-  <!-- 🔮 Forecast below Mood Trend -->
-  <div class="chart-card" id="forecast-card" style="display:none;">
-    <h2>Next 7 Days Mood Forecast</h2>
-    <canvas id="forecastChart" width="800" height="300"></canvas>
-    <p id="forecast-message"></p>
+  <!-- 💫 Emotion Radar -->
+  <div class="chart-card">
+    <h2>Weekly Emotion Distribution</h2>
+    <canvas id="emotionRadar" width="500" height="300"></canvas>
   </div>
 
   <script>
@@ -113,7 +100,7 @@
         }
       });
 
-    // --- Fetch posts + mood trend ---
+    // --- Fetch Mood Trend ---
     fetch(`/api/fetch/${username}`)
       .then(r => r.json())
       .then(fetchData => {
@@ -157,48 +144,35 @@
             plugins: { legend: { labels: { color: "#E0E0E0" } } }
           }
         });
-      })
-      .catch(err => console.error(err));
+      });
 
-    // --- Fetch Forecast (below trend) ---
-    fetch(`/api/forecast/${username}`)
+    // --- Fetch Weekly Emotion Distribution ---
+    fetch(`/api/emotions/${username}`)
       .then(r => r.json())
       .then(data => {
-        if (!data.forecast || data.forecast.length === 0) return;
+        if (!data || Object.keys(data).length === 0) return;
 
-        const labels = data.forecast.map(f => f.date);
-        const values = data.forecast.map(f => f.predicted_mood);
+        const labels = Object.keys(data);
+        const values = Object.values(data);
 
-        new Chart(document.getElementById("forecastChart"), {
-          type: "line",
+        new Chart(document.getElementById("emotionRadar"), {
+          type: "radar",
           data: {
             labels: labels,
             datasets: [{
-              label: "Predicted Mood Score (Next 7 Days)",
+              label: "Weekly Emotion Distribution",
               data: values,
-              borderColor: "#FFD700",
-              backgroundColor: "rgba(255,215,0,0.15)",
-              fill: true,
-              tension: 0.3
+              backgroundColor: "rgba(64,224,208,0.2)",
+              borderColor: "#40E0D0",
+              pointBackgroundColor: "#40E0D0"
             }]
           },
           options: {
-            scales: {
-              y: { min: -1, max: 1, ticks: { color: "#E0E0E0" } },
-              x: { ticks: { color: "#E0E0E0" } }
-            },
+            scales: { r: { min: 0, max: 1, pointLabels: { color: "#E0E0E0" } } },
             plugins: { legend: { labels: { color: "#E0E0E0" } } }
           }
         });
-
-        const card = document.getElementById("forecast-card");
-        card.style.display = "block";
-        const msg = document.getElementById("forecast-message");
-        msg.innerHTML = data.badge
-          ? `${data.badge} — ${data.message}`
-          : `💛 ${data.message}`;
-      })
-      .catch(e => console.error("Forecast error", e));
+      });
   </script>
 </body>
 </html>
