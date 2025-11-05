@@ -1,0 +1,230 @@
+<!doctype html>
+<html>
+<head>
+  <title>Equinox Dashboard - {{username}}</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body {
+      font-family: 'Segoe UI', Tahoma, sans-serif;
+      margin: 20px;
+      background: #121212;
+      color: #E0E0E0;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      gap: 15px;
+      margin-bottom: 25px;
+    }
+    header img {
+      width: 60px;
+      height: 60px;
+    }
+    header h1 {
+      margin: 0;
+      font-size: 28px;
+      color: #40E0D0;
+    }
+    header p {
+      margin: 0;
+      font-size: 14px;
+      color: #A0A0A0;
+    }
+    h2 {
+      color: #40E0D0;
+      margin-bottom: 10px;
+    }
+    #alerts {
+      margin-top: 20px;
+      padding: 12px;
+      background: rgba(64, 224, 208, 0.1);
+      border: 1px solid #40E0D0;
+      border-radius: 8px;
+      color: #40E0D0;
+      display: none;
+    }
+    .alert-item {
+      margin-bottom: 8px;
+    }
+    canvas {
+      background: #1E1E1E;
+      border-radius: 8px;
+      padding: 10px;
+    }
+    .aura-section {
+      background: #1E1E1E;
+      border-radius: 10px;
+      padding: 15px 20px;
+      margin-bottom: 25px;
+      box-shadow: 0 0 15px rgba(64, 224, 208, 0.2);
+    }
+    .aura-section h2 {
+      margin-top: 0;
+    }
+    #aura-info {
+      margin: 10px 0;
+      font-size: 16px;
+      line-height: 1.4;
+    }
+    #topics-container {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      margin-top: 20px;
+    }
+    #topicChart {
+      max-width: 400px;
+      max-height: 300px;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <img src="{{ url_for('static', filename='logo.png') }}" alt="Equinox Logo">
+    <div>
+      <h1>Equinox</h1>
+      <p>Balancing minds, one insight at a time.</p>
+    </div>
+  </header>
+
+  <!-- 🌈 Aura Section -->
+  <div class="aura-section">
+    <h2>🌈 Your Aura</h2>
+    <p id="aura-info">Loading your aura and topics...</p>
+    <div id="topics-container">
+      <canvas id="topicChart"></canvas>
+    </div>
+  </div>
+
+  <!-- 📈 Mood Chart -->
+  <h2>Mood Trend for {{username}}</h2>
+  <canvas id="moodChart" width="800" height="300"></canvas>
+
+  <!-- ⚠️ Alerts -->
+  <div id="alerts">
+    <h3>⚠️ Alerts</h3>
+    <div id="alerts-list"></div>
+  </div>
+
+  <script>
+    // === Step 1: Fetch aura data ===
+    fetch(`/api/aura/{{username}}`)
+      .then(r => r.json())
+      .then(aura => {
+        const auraDiv = document.getElementById("aura-info");
+
+        if (aura.error) {
+          auraDiv.textContent = "Not enough data to determine your aura.";
+          return;
+        }
+
+        // Show Aura info
+        auraDiv.innerHTML = `
+          <b>${aura.aura}</b><br>
+          ${aura.description}<br><br>
+          <i>${aura.comment}</i>
+        `;
+
+        // Create topic chart
+        const topicData = aura.topics || {};
+        const labels = Object.keys(topicData);
+        const values = Object.values(topicData);
+
+        if (labels.length > 0) {
+          new Chart(document.getElementById("topicChart"), {
+            type: "pie",
+            data: {
+              labels: labels,
+              datasets: [{
+                data: values,
+                backgroundColor: [
+                  "#40E0D0", "#2bb5a6", "#FF914D", "#FFD700", "#A0A0A0", "#FFB6C1"
+                ]
+              }]
+            },
+            options: {
+              plugins: {
+                legend: {
+                  labels: { color: "#E0E0E0" }
+                },
+                title: {
+                  display: true,
+                  text: "Topic Distribution",
+                  color: "#40E0D0"
+                }
+              }
+            }
+          });
+        }
+      })
+      .catch(err => console.error("Aura fetch error:", err));
+
+    // === Step 2: Fetch posts then mood trend ===
+    fetch(`/api/fetch/{{username}}`)
+      .then(r => r.json())
+      .then(fetchData => {
+        if (fetchData.fetched > 0) {
+          return fetch(`/api/mood_trend/{{username}}?days=60`);
+        } else {
+          throw new Error("No posts fetched for this user.");
+        }
+      })
+      .then(r => r.json())
+      .then(data => {
+        const trend = data.trend || [];
+        if (trend.length === 0) {
+          alert("No recent posts to plot!");
+          return;
+        }
+
+        const labels = trend.map(d => d.date);
+        const values = trend.map(d => d.avg_compound);
+
+        new Chart(document.getElementById("moodChart").getContext('2d'), {
+          type: "line",
+          data: {
+            labels: labels,
+            datasets: [{
+              label: "Sentiment (compound score)",
+              data: values,
+              fill: true,
+              borderColor: "#40E0D0",
+              backgroundColor: "rgba(64,224,208,0.15)",
+              tension: 0.25,
+              pointRadius: 4,
+              pointBackgroundColor: "#40E0D0"
+            }]
+          },
+          options: {
+            scales: { 
+              y: { min: -1, max: 1, ticks: { color: "#E0E0E0" } },
+              x: { ticks: { color: "#E0E0E0" } }
+            },
+            plugins: { 
+              legend: { labels: { color: "#E0E0E0" } }
+            }
+          }
+        });
+
+        // === Step 3: Alerts ===
+        const alerts = data.alerts || [];
+        if (alerts.length > 0) {
+          const alertBox = document.getElementById("alerts");
+          const list = document.getElementById("alerts-list");
+          list.innerHTML = "";
+          alerts.forEach(a => {
+            const div = document.createElement("div");
+            div.className = "alert-item";
+            div.textContent = `${a.date}: ${a.message}`;
+            list.appendChild(div);
+          });
+          alertBox.style.display = "block";
+        }
+      })
+      .catch(err => {
+        console.error(err);
+        alert("Error loading posts or mood trend.");
+      });
+  </script>
+</body>
+</html>
