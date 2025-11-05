@@ -13,6 +13,30 @@
       height: 100vh;
       margin: 0;
     }
+
+    /* --- Header Therapist Button --- */
+    header {
+      position: absolute;
+      top: 20px;
+      right: 30px;
+    }
+    header a {
+      color: #40E0D0;
+      text-decoration: none;
+      border: 1px solid #40E0D0;
+      padding: 8px 14px;
+      border-radius: 8px;
+      font-weight: 500;
+      transition: 0.3s ease;
+      box-shadow: 0 0 8px rgba(64, 224, 208, 0.4);
+    }
+    header a:hover {
+      background: #40E0D0;
+      color: #121212;
+      box-shadow: 0 0 15px rgba(64, 224, 208, 0.8);
+    }
+
+    /* --- Login Container --- */
     .container {
       text-align: center;
       background: #1E1E1E;
@@ -57,14 +81,21 @@
       border: none;
       border-radius: 8px;
       cursor: pointer;
-      transition: background 0.3s;
+      transition: background 0.3s, box-shadow 0.3s;
     }
     button:hover {
       background: #2bb5a6;
+      box-shadow: 0 0 10px rgba(64, 224, 208, 0.6);
     }
   </style>
 </head>
 <body>
+
+  <!-- Therapist Dashboard Button -->
+  <header>
+    <a href="/therapist">Therapist Dashboard</a>
+  </header>
+
   <div class="container">
     <img src="{{ url_for('static', filename='logo.png') }}" alt="Equinox Logo">
     <h1>Equinox</h1>
@@ -76,5 +107,6 @@
       <button type="submit">View Dashboard</button>
     </form>
   </div>
+
 </body>
 </html>

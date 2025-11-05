@@ -1,0 +1,86 @@
+<!doctype html>
+<html>
+<head>
+  <title>Therapist Dashboard - Equinox</title>
+  <style>
+    body {
+      background: #121212;
+      color: #E0E0E0;
+      font-family: 'Segoe UI', Tahoma, sans-serif;
+      padding: 40px;
+    }
+    input, select {
+      padding: 8px;
+      border-radius: 8px;
+      border: 1px solid #40E0D0;
+      background: #1E1E1E;
+      color: #E0E0E0;
+      margin-right: 10px;
+    }
+    button {
+      background: #40E0D0;
+      color: #121212;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+    table {
+      width: 100%;
+      margin-top: 20px;
+      border-collapse: collapse;
+    }
+    th, td {
+      border-bottom: 1px solid #2a2a2a;
+      padding: 10px;
+    }
+    tr:hover {
+      background: rgba(64, 224, 208, 0.1);
+    }
+    a {
+      color: #40E0D0;
+      text-decoration: none;
+    }
+  </style>
+</head>
+<body>
+  <h1>Therapist Dashboard</h1>
+  <div>
+    <input type="text" id="searchName" placeholder="Search by patient name...">
+    <select id="emotionFilter">
+      <option value="">All Emotions</option>
+      <option value="happy">Happy</option>
+      <option value="sad">Sad</option>
+      <option value="calm">Calm</option>
+    </select>
+    <button onclick="loadPatients()">Search</button>
+  </div>
+
+  <table id="resultsTable">
+    <thead>
+      <tr><th>Patient</th><th>Posts</th><th>Dominant Emotion</th></tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+
+  <script>
+    async function loadPatients() {
+      const name = document.getElementById('searchName').value;
+      const emotion = document.getElementById('emotionFilter').value;
+      const url = `/api/therapist/search?name=${name}&emotion=${emotion}`;
+      const res = await fetch(url);
+      const data = await res.json();
+      const tbody = document.querySelector('#resultsTable tbody');
+      tbody.innerHTML = '';
+      data.patients.forEach(p => {
+        const row = document.createElement('tr');
+        row.innerHTML = `<td><a href="/patient/${p.author}">${p.author}</a></td>
+                         <td>${p.post_count}</td>
+                         <td>${p.dominant_emotion}</td>`;
+        tbody.appendChild(row);
+      });
+    }
+    loadPatients();
+  </script>
+</body>
+</html>

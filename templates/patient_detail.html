@@ -1,0 +1,42 @@
+<!doctype html>
+<html>
+<head>
+  <title>Patient Detail - {{author}}</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body {
+      background: #121212;
+      color: #E0E0E0;
+      font-family: 'Segoe UI', Tahoma, sans-serif;
+      padding: 40px;
+    }
+  </style>
+</head>
+<body>
+  <h1>{{author}}</h1>
+  <h2>{{aura.aura}}</h2>
+  <p>{{aura.description}}</p>
+
+  <canvas id="emotionChart" width="400" height="400"></canvas>
+  <script>
+    const emotions = {{ emotions|tojson }};
+    const labels = Object.keys(emotions);
+    const data = Object.values(emotions);
+    new Chart(document.getElementById('emotionChart'), {
+      type: 'radar',
+      data: {
+        labels: labels,
+        datasets: [{
+          label: 'Emotion Intensity',
+          data: data,
+          borderColor: '#40E0D0',
+          backgroundColor: 'rgba(64,224,208,0.2)',
+        }]
+      },
+      options: {
+        scales: { r: { ticks: { display: false } } }
+      }
+    });
+  </script>
+</body>
+</html>

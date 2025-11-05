@@ -3,10 +3,11 @@ import re
 from datetime import datetime, timedelta
 from flask import Flask, render_template, jsonify, request, redirect, url_for
 import praw
+import pandas as pd
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
-from ingest import scrape_subreddits, load_cached_df  # Therapist/admin dataset
+from ingest import scrape_subreddits, load_cached_df
 from aura import analyze_aura
-from nlp_bert import analyze_emotions  # BERT-based emotion analysis (radar)
+from nlp_bert import analyze_emotions
 
 # --- CONFIG ---
 REDDIT_CLIENT_ID = "M1I1jvc74xBb2xr-QuK2zQ"
@@ -16,7 +17,7 @@ REDDIT_USER_AGENT = "wellness-tracker-demo"
 # --- APP INIT ---
 app = Flask(__name__)
 analyzer = SentimentIntensityAnalyzer()
-user_posts = {}  # In-memory user posts
+user_posts = {}
 
 # --- Reddit Init ---
 def init_reddit():
@@ -88,16 +89,8 @@ def get_daily_mood(username, days=60):
     ]
     return trend
 
-# --- Generate Alerts ---
-def get_alerts(username, threshold=-0.5):
-    trend = get_daily_mood(username, days=60)
-    alerts = []
-    for t in trend:
-        if t["avg_compound"] < threshold:
-            alerts.append({"date": t["date"], "message": "Significant drop in mood"})
-    return alerts
-
 # --- ROUTES ---
+
 @app.route("/")
 def home():
     return render_template("home.html")
@@ -109,94 +102,50 @@ def dashboard():
         return redirect(url_for("home"))
     return render_template("dashboard.html", username=username)
 
-@app.route("/api/fetch/<username>")
-def api_fetch(username):
-    try:
-        posts = fetch_user_submissions(username, limit=100)
-        return jsonify({"fetched": len(posts)})
-    except Exception as e:
-        return jsonify({"fetched": 0, "error": str(e)})
+# --- Therapist Pages ---
 
-@app.route("/api/mood_trend/<username>")
-def api_mood(username):
-    days = int(request.args.get("days", 60))
-    daily = get_daily_mood(username, days)
-    alerts = get_alerts(username)
-    return jsonify({"trend": daily, "alerts": alerts})
+@app.route("/therapist")
+def therapist_dashboard():
+    """Main Therapist Dashboard"""
+    return render_template("therapist_dashboard.html")
 
-@app.route("/api/aura/<username>")
-def api_aura(username):
-    posts = user_posts.get(username)
-    if not posts:
-        try:
-            posts = fetch_user_submissions(username, limit=50)
-        except Exception as e:
-            return jsonify({"error": f"Unable to fetch posts: {str(e)}"})
-    try:
-        aura_result = analyze_aura(posts)
-        return jsonify(aura_result)
-    except Exception as e:
-        return jsonify({"error": f"Aura analysis failed: {str(e)}"})
+@app.route("/patient/<string:author>")
+def patient_detail(author):
+    """Detailed page for one patient"""
+    df = load_cached_df()
+    posts = df[df["author"] == author].to_dict("records")
+    aura = analyze_aura([{"text": p["title"] + " " + p.get("selftext", "")} for p in posts[:30]])
+    emotions = analyze_emotions([{"text": p["title"] + " " + p.get("selftext", "")} for p in posts[:20]])
+    return render_template("patient_detail.html", author=author, aura=aura, emotions=emotions)
 
-@app.route("/api/emotions/<username>")  # BERT-based weekly emotion distribution
-def api_emotions(username):
-    posts = user_posts.get(username)
-    if not posts:
-        try:
-            posts = fetch_user_submissions(username, limit=50)
-        except Exception as e:
-            return jsonify({"error": f"Unable to fetch posts: {str(e)}"})
-    try:
-        result = analyze_emotions(posts)
-        return jsonify(result)
-    except Exception as e:
-        return jsonify({"error": f"Emotion analysis failed: {str(e)}"})
+@app.route("/api/therapist/search")
+def therapist_search():
+    """Dynamic search and filter API"""
+    name_query = request.args.get("name", "").lower()
+    emotion_filter = request.args.get("emotion", "").lower()
 
-# --- ADMIN (THERAPIST) ENDPOINTS ---
-@app.route("/api/admin/scrape")
-def admin_scrape():
-    """
-    Scrape multiple subreddits deeply (top, hot, new, rising)
-    and cache the dataset for therapist analytics.
-    """
-    subs = request.args.get("subs")
-    sub_list = [s.strip() for s in subs.split(",")] if subs else None
-    posts_per_sub = int(request.args.get("limit", 1000))  # default 1000 posts/subreddit
-
-    try:
-        reddit = init_reddit()
-        df, json_path, csv_path = scrape_subreddits(
-            reddit,
-            subreddits=sub_list,
-            posts_per_sub=posts_per_sub
-        )
-        return jsonify({
-            "ok": True,
-            "rows": int(len(df)),
-            "json_cache": json_path,
-            "csv_cache": csv_path
-        })
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
-
-@app.route("/api/admin/users")
-def admin_users():
-    """
-    Loads cached Reddit data and returns top users by number of posts.
-    This will power the therapist dashboard later.
-    """
     df = load_cached_df()
     if df.empty:
-        return jsonify({
-            "users": [],
-            "rows": 0,
-            "note": "Cache empty. Run /api/admin/scrape first."
-        })
+        return jsonify({"patients": [], "note": "Cache empty. Please scrape first."})
 
-    vc = df["author"].fillna("[deleted]").value_counts().reset_index()
-    vc.columns = ["author", "posts"]
-    users = vc.head(50).to_dict("records")
-    return jsonify({"users": users, "rows": int(len(df))})
+    # Aggregate per author
+    patients = (
+        df.groupby("author")
+        .agg({"title": "count"})
+        .rename(columns={"title": "post_count"})
+        .reset_index()
+    )
+    patients["dominant_emotion"] = [
+        "happy" if i % 3 == 0 else "sad" if i % 3 == 1 else "calm" for i in range(len(patients))
+    ]  # dummy placeholder
+
+    if name_query:
+        patients = patients[patients["author"].str.lower().str.contains(name_query)]
+    if emotion_filter:
+        patients = patients[patients["dominant_emotion"].str.lower() == emotion_filter]
+
+    result = patients.head(50).to_dict("records")
+    return jsonify({"patients": result, "count": len(result)})
 
 # --- RUN APP ---
 if __name__ == "__main__":
