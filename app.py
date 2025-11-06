@@ -1,14 +1,18 @@
 # app.py
 import re
 from datetime import datetime, timedelta
+from collections import defaultdict, Counter
+
 from flask import Flask, render_template, jsonify, request, redirect, url_for
 import praw
+import pandas as pd
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 
 # Local modules
 from ingest import scrape_subreddits, load_cached_df
 from aura import analyze_aura
-from nlp_bert import analyze_emotions
+from nlp_bert import analyze_emotions, emotion_analyzer  # reuse loaded HF pipeline
+from personality import analyze_big5  # NEW helper module for Big Five heuristic
 
 # --- CONFIG ---
 REDDIT_CLIENT_ID = "M1I1jvc74xBb2xr-QuK2zQ"
@@ -18,7 +22,7 @@ REDDIT_USER_AGENT = "wellness-tracker-demo"
 # --- APP INIT ---
 app = Flask(__name__)
 analyzer = SentimentIntensityAnalyzer()
-user_posts = {}  # in-memory cache per username
+user_posts = {}  # in-memory cache per username for the dashboard
 
 # --- Reddit Init ---
 def init_reddit():
@@ -38,24 +42,25 @@ def preprocess_text(text: str) -> str:
     text = re.sub(r"\s+", " ", text).strip()
     return text
 
-# --- Fetch Reddit Posts for a Specific User ---
+# --- Fetch Reddit Posts for a Specific User (used by dashboard) ---
 def fetch_user_submissions(username, limit=100):
     reddit = init_reddit()
     ruser = reddit.redditor(username)
     posts = []
     for s in ruser.submissions.new(limit=limit):
-        text = (s.title or "") + " " + (s.selftext or "")
+        text = (getattr(s, "title", "") or "") + " " + (getattr(s, "selftext", "") or "")
         clean_text = preprocess_text(text)
+        created_utc = getattr(s, "created_utc", 0) or 0
         posts.append({
-            "id": s.id,
-            "title": s.title or "",
-            "created": datetime.utcfromtimestamp(getattr(s, "created_utc", 0) or 0),
+            "id": getattr(s, "id", ""),
+            "title": getattr(s, "title", "") or "",
+            "created": datetime.utcfromtimestamp(created_utc),
             "text": clean_text,
         })
     user_posts[username] = posts
     return posts
 
-# --- Sentiment Analysis ---
+# --- Sentiment Analysis (VADER) ---
 def analyze_posts(posts):
     results = []
     for p in posts:
@@ -71,7 +76,7 @@ def analyze_posts(posts):
         })
     return results
 
-# --- Aggregate Daily Mood ---
+# --- Aggregate Daily Mood for dashboard ---
 def get_daily_mood(username, days=60):
     posts = user_posts.get(username, [])
     if not posts:
@@ -89,6 +94,101 @@ def get_daily_mood(username, days=60):
         for d, vals in sorted(buckets.items())
     ]
     return trend
+
+# =========================
+# Helpers for Therapist Insights
+# =========================
+
+EMOTION_KEYS = ["joy", "love", "surprise", "anger", "sadness", "fear", "disgust", "neutral"]
+
+def _analyze_emotion_trend(texts, dates):
+    """
+    Run BERT emotion classifier per post, aggregate by day, and
+    return (labels, series_dict) for a stacked area chart.
+    Values are normalized per day to sum to 1.0.
+    """
+    # 1) Score each post
+    per_post = []
+    for t in texts:
+        t = (t or "").strip()
+        if not t:
+            per_post.append({})
+            continue
+        res = emotion_analyzer(t[:512])[0]  # list of dicts
+        scores = {d["label"].lower(): float(d["score"]) for d in res}
+        per_post.append(scores)
+
+    # 2) Bucket by date
+    buckets = defaultdict(list)  # date -> list of score dicts
+    for d, sc in zip(dates, per_post):
+        buckets[d].append(sc)
+
+    # 3) Aggregate per day
+    day_labels = sorted(buckets.keys())
+    series = {k: [] for k in EMOTION_KEYS}
+    for day in day_labels:
+        agg = Counter()
+        for sc in buckets[day]:
+            agg.update(sc)
+        total = sum(agg.values())
+        for k in EMOTION_KEYS:
+            val = float(agg.get(k, 0.0))
+            series[k].append(round(val / total, 4) if total > 0 else 0.0)
+
+    # prune empty series (all zeros)
+    series = {k: v for k, v in series.items() if any(x > 0 for x in v)}
+    return day_labels, series
+
+
+def _assess_risks(texts, vader_avg, emo_daily_series):
+    """
+    Lightweight, explainable heuristics for clinical risk flags.
+    Returns categorical levels: 'low' | 'moderate' | 'high'.
+    Not a diagnosis.
+    """
+    corpus = " ".join(texts).lower()
+
+    # keyword hints (non-exhaustive)
+    kw_suicide = ["suicide", "kill myself", "end my life", "self harm", "self-harm", "cutting", "no reason to live"]
+    kw_anxiety = ["panic", "worry", "anxious", "anxiety", "restless", "overthinking"]
+    kw_ptsd    = ["flashback", "nightmare", "trauma", "abuse", "assault", "intrusive", "hypervigilant"]
+    kw_schizo  = ["voices", "hallucination", "paranoid", "delusion", "thought broadcasting", "schizophrenia"]
+
+    def score_keywords(kws): 
+        return sum(1 for k in kws if k in corpus)
+
+    # emotion proportions - last day (if available)
+    emo_keys = list(emo_daily_series.keys())
+    last_vals = {k: (emo_daily_series[k][-1] if emo_daily_series.get(k) else 0.0) for k in emo_keys}
+    sadness = last_vals.get("sadness", 0.0)
+    fear    = last_vals.get("fear", 0.0)
+    anger   = last_vals.get("anger", 0.0)
+    disgust = last_vals.get("disgust", 0.0)
+    surprise= last_vals.get("surprise", 0.0)
+    neutral = last_vals.get("neutral", 0.0)
+
+    def bucket(x):
+        if x >= 0.66: return "high"
+        if x >= 0.33: return "moderate"
+        return "low"
+
+    # Combine keyword + emotion + sentiment hints
+    dep_score = 0.45*sadness + 0.25*(1-neutral) + 0.30*max(0.0, -vader_avg) + 0.05*score_keywords(["worthless","fatigue","insomnia","guilty"])
+    anx_score = 0.40*fear + 0.20*surprise + 0.25*score_keywords(kw_anxiety) + 0.15*max(0.0, -vader_avg)
+    ptsd_sc   = 0.45*score_keywords(kw_ptsd) + 0.30*fear + 0.25*anger
+    sch_sc    = 0.55*score_keywords(kw_schizo) + 0.20*surprise + 0.25*disgust
+    sui_sc    = 0.60*score_keywords(kw_suicide) + 0.25*sadness + 0.15*max(0.0, -vader_avg)
+
+    # Normalize to ~[0,1] caps
+    def norm(x, cap): return min(x / cap, 1.0)
+    risks = {
+        "depression": bucket(norm(dep_score, 1.2)),
+        "anxiety": bucket(norm(anx_score, 1.2)),
+        "ptsd": bucket(norm(ptsd_sc, 1.0)),
+        "schizophrenia": bucket(norm(sch_sc, 1.0)),
+        "suicidal": bucket(norm(sui_sc, 1.0)),
+    }
+    return risks
 
 # =========================
 # Frontend Pages
@@ -114,16 +214,103 @@ def therapist_dashboard():
 
 @app.route("/patient/<string:author>")
 def patient_detail(author):
-    """Detailed page for one patient"""
+    """
+    Therapist insights page for a single Reddit author.
+    - Aura (KMeans over sentence embeddings)
+    - Stacked area emotion trend (BERT)
+    - Big-Five heuristic
+    - Risk flags (Depression/Anxiety/PTSD/Schizophrenia/Suicidal)
+    - Session prep tips + trend summary
+    """
     df = load_cached_df()
-    posts = df[df["author"] == author].to_dict("records")
-    aura = analyze_aura([{"text": (p.get("title","") + " " + p.get("selftext","")).strip()} for p in posts[:30]])
-    emotions = analyze_emotions([{"text": (p.get("title","") + " " + p.get("selftext","")).strip()} for p in posts[:20]])
-    return render_template("patient_detail.html", author=author, aura=aura, emotions=emotions)
+    if df.empty or "author" not in df.columns:
+        return render_template(
+            "patient_detail.html",
+            author=author,
+            aura={"aura": "(no data)", "description": "Scrape first."},
+            big5={"openness": 0, "conscientiousness": 0, "extraversion": 0, "agreeableness": 0, "neuroticism": 0},
+            risks={"depression": "low", "anxiety": "low", "ptsd": "low", "schizophrenia": "low", "suicidal": "low"},
+            trend_labels=[], trend_series={}, trend_summary="No data yet.",
+            quick_insight="No cached posts found.",
+            session_tips=["Collect a fresh batch of posts."]
+        )
+
+    user_df = df[df["author"] == author].copy()
+    if user_df.empty:
+        return render_template(
+            "patient_detail.html",
+            author=author,
+            aura={"aura": "(no data)", "description": "No posts for this user in cache."},
+            big5={"openness": 0, "conscientiousness": 0, "extraversion": 0, "agreeableness": 0, "neuroticism": 0},
+            risks={"depression": "low", "anxiety": "low", "ptsd": "low", "schizophrenia": "low", "suicidal": "low"},
+            trend_labels=[], trend_series={}, trend_summary="No posts in cache.",
+            quick_insight="Try scraping again.",
+            session_tips=["Gather more recent posts (past 30–60 days)."]
+        )
+
+    # Prepare texts & dates
+    text_col = (user_df["title"].fillna("") + " " + user_df.get("text", "").fillna("")).str.strip()
+    texts = text_col.tolist()
+    dates = pd.to_datetime(user_df["created_utc"], unit="s", errors="coerce", utc=True).dt.date.astype(str).tolist()
+
+    # Aura
+    aura = analyze_aura([{"text": t} for t in texts[:60]])
+
+    # Daily stacked emotion trend
+    trend_labels, trend_series = _analyze_emotion_trend(texts[:120], dates[:120])
+
+    # VADER average (from cached df if present)
+    vader_avg = float(user_df.get("vader_compound", pd.Series([0])).astype(float).mean())
+
+    # Big Five heuristic (0-100)
+    big5 = analyze_big5(texts)
+
+    # Clinical risk flags (heuristic)
+    risks = _assess_risks(texts, vader_avg, trend_series)
+
+    # Quick insight & trend summary (text)
+    dom_emotion = None
+    if trend_series:
+        last_vals = {k: (trend_series[k][-1] if trend_series[k] else 0.0) for k in trend_series}
+        dom_emotion = max(last_vals, key=last_vals.get)
+    quick_insight = f"Recent language shows {dom_emotion or 'balanced'} affect; average sentiment {vader_avg:+.2f}. Aura suggests: {aura.get('aura','')}."
+
+    def pct(x): return f"{round(x*100)}%"
+    trend_summary = "Over recent posts, emotion mix shows " + \
+        ", ".join([f"{k}: {pct(v[-1])}" for k, v in trend_series.items() if v]) + "."
+
+    # Session tips
+    tips = []
+    if risks.get("suicidal") == "high":
+        tips.append("Assess safety first; ask direct questions about intent, plan, means; provide crisis resources.")
+    if risks.get("depression") in ("moderate", "high"):
+        tips.append("Screen for MDD; explore sleep, appetite, anhedonia; introduce behavioral activation.")
+    if risks.get("anxiety") in ("moderate", "high"):
+        tips.append("Use grounding/breathing; identify triggers; consider CBT psychoeducation.")
+    if risks.get("ptsd") in ("moderate", "high"):
+        tips.append("Check trauma history and avoidance; stabilize before trauma processing.")
+    if risks.get("schizophrenia") in ("moderate", "high"):
+        tips.append("Clarify reality-testing issues (hallucinations/delusions); consider psychiatric referral.")
+    if not tips:
+        tips.append("Build rapport; reinforce strengths from positive/neutral periods; set session goals.")
+    tips.append("Validate emotions reflected in recent posts and agree on a small between-session action.")
+
+    return render_template(
+        "patient_detail.html",
+        author=author,
+        aura=aura,
+        big5=big5,
+        risks=risks,
+        trend_labels=trend_labels,
+        trend_series=trend_series,
+        trend_summary=trend_summary,
+        quick_insight=quick_insight,
+        session_tips=tips
+    )
 
 @app.route("/api/therapist/search")
 def therapist_search():
-    """Dynamic search and filter API"""
+    """Dynamic search and filter API for therapist dashboard"""
     name_query = request.args.get("name", "").lower()
     emotion_filter = request.args.get("emotion", "").lower()
 
@@ -153,7 +340,7 @@ def therapist_search():
     return jsonify({"patients": result, "count": len(result)})
 
 # =========================
-# APIs used by dashboard.html
+# APIs used by the user dashboard
 # =========================
 
 @app.route("/api/fetch/<string:username>")

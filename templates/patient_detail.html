@@ -1,40 +1,165 @@
 <!doctype html>
 <html>
 <head>
-  <title>Patient Detail - {{author}}</title>
+  <meta charset="utf-8">
+  <title>Insights of {{author}} · Equinox</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <style>
-    body {
-      background: #121212;
-      color: #E0E0E0;
-      font-family: 'Segoe UI', Tahoma, sans-serif;
-      padding: 40px;
+    :root {
+      --bg: #121212;
+      --panel: #1e1e1e;
+      --ink: #e0e0e0;
+      --muted: #a0a0a0;
+      --teal: #40E0D0;
     }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; padding: 28px;
+      background: var(--bg); color: var(--ink);
+      font-family: "Segoe UI", Tahoma, sans-serif;
+    }
+    h1 {
+      font-size: 36px; margin: 0 0 18px 0;
+      color: #6fb1ab; letter-spacing: .5px;
+      text-shadow: 0 0 12px rgba(64,224,208,.18);
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: 320px 1fr 1.1fr;
+      gap: 24px;
+    }
+    .card {
+      background: var(--panel);
+      border-radius: 18px;
+      padding: 18px 20px;
+      box-shadow: 0 0 22px rgba(64,224,208,.16);
+    }
+    .tall { min-height: 560px; }
+    .pill { display: inline-block; padding: 6px 12px; border-radius: 999px; font-size: 12px; color: var(--bg); background: var(--teal); }
+    .title { margin: 0 0 10px 0; color: var(--teal); letter-spacing:.3px; }
+    .aura-chip {
+      background: radial-gradient(120% 120% at 0% 0%, #40e0d0 0%, #1e1e1e 70%);
+      border-radius: 16px; padding: 18px; margin: 10px 0 14px 0;
+      box-shadow: 0 0 18px rgba(64,224,208,.28);
+    }
+    .muted { color: var(--muted); }
+    .list { margin: 8px 0 0 0; padding-left: 18px; }
+    .warn { background: rgba(255, 120, 120, .14); border: 1px solid rgba(255,120,120,.4); }
+    .ok { background: rgba(64, 224, 208, .12); border: 1px solid rgba(64,224,208,.35); }
+    .section-title { font-weight: 700; margin: 8px 0 6px 0; color:#cfeae8 }
+    .block { background:#151515; border:1px solid #2a2a2a; border-radius: 14px; padding: 12px 14px; margin-top: 10px; }
+    canvas { width: 100% !important; height: 320px !important; background: #0f0f0f; border-radius: 12px; padding: 8px; }
+    @media (max-width: 1100px) { .grid { grid-template-columns: 1fr; } .tall { min-height: auto; } }
   </style>
 </head>
 <body>
-  <h1>{{author}}</h1>
-  <h2>{{aura.aura}}</h2>
-  <p>{{aura.description}}</p>
+  <h1>Insights of <strong>{{author}}</strong></h1>
 
-  <canvas id="emotionChart" width="400" height="400"></canvas>
+  <div class="grid">
+    <!-- LEFT: Aura + quick insight -->
+    <div class="card tall">
+      <div class="pill">User aura</div>
+      <div class="aura-chip">
+        <div style="font-size:18px; font-weight:700;">{{aura.aura}}</div>
+        <div class="muted" style="margin-top:6px">{{aura.description}}</div>
+      </div>
+
+      <div class="section-title">Insight</div>
+      <div class="block">
+        {{quick_insight}}
+      </div>
+
+      <div class="section-title">Session prep — summary of trends</div>
+      <div class="block">
+        {{trend_summary}}
+      </div>
+    </div>
+
+    <!-- MIDDLE: Stacked area BERT trend + session tips -->
+    <div>
+      <div class="card">
+        <h3 class="title">Trend evolution (emotions)</h3>
+        <canvas id="stackedArea"></canvas>
+      </div>
+
+      <div class="card" style="margin-top:16px;">
+        <h3 class="title">Session insights</h3>
+        <ul class="list">
+          {% for tip in session_tips %}
+            <li>{{tip}}</li>
+          {% endfor %}
+        </ul>
+      </div>
+    </div>
+
+    <!-- RIGHT: Personality + Warnings -->
+    <div class="card tall">
+      <h3 class="title">Personality insights</h3>
+      <div class="block ok">
+        <div><strong>Big Five (0–100)</strong></div>
+        <ul class="list">
+          <li>Openness: {{big5.openness}}</li>
+          <li>Conscientiousness: {{big5.conscientiousness}}</li>
+          <li>Extraversion: {{big5.extraversion}}</li>
+          <li>Agreeableness: {{big5.agreeableness}}</li>
+          <li>Neuroticism: {{big5.neuroticism}}</li>
+        </ul>
+      </div>
+
+      <div class="section-title">Warnings</div>
+      <div class="block warn">
+        <ul class="list">
+          <li>Depression: <strong>{{risks.depression}}</strong></li>
+          <li>Anxiety: <strong>{{risks.anxiety}}</strong></li>
+          <li>PTSD: <strong>{{risks.ptsd}}</strong></li>
+          <li>Schizophrenia: <strong>{{risks.schizophrenia}}</strong></li>
+          <li>Suicidal risk: <strong>{{risks.suicidal}}</strong></li>
+        </ul>
+        <div class="muted" style="margin-top:8px;font-size:12px;">
+          These indicators are heuristic (non-diagnostic). Use clinically with caution.
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script>
-    const emotions = {{ emotions|tojson }};
-    const labels = Object.keys(emotions);
-    const data = Object.values(emotions);
-    new Chart(document.getElementById('emotionChart'), {
-      type: 'radar',
-      data: {
-        labels: labels,
-        datasets: [{
-          label: 'Emotion Intensity',
-          data: data,
-          borderColor: '#40E0D0',
-          backgroundColor: 'rgba(64,224,208,0.2)',
-        }]
-      },
+    // ---- Stacked area chart (BERT emotion evolution) ----
+    const labels = {{ trend_labels|tojson }};
+    const series = {{ trend_series|tojson }};
+    const palette = [
+      "#6dd3c1", "#8aa9ff", "#ffb14d", "#ff799a",
+      "#93e85b", "#ffd86b", "#c289ff", "#7ad3ff"
+    ];
+    const datasets = Object.keys(series).map((k, i) => ({
+      label: k,
+      data: series[k],
+      borderColor: palette[i % palette.length],
+      backgroundColor: palette[i % palette.length] + "44",
+      fill: true,
+      tension: 0.25,
+      pointRadius: 0
+    }));
+
+    new Chart(document.getElementById("stackedArea"), {
+      type: "line",
+      data: { labels, datasets },
       options: {
-        scales: { r: { ticks: { display: false } } }
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: "index", intersect: false },
+        stacked: true,
+        plugins: {
+          legend: { labels: { color: "#e0e0e0" } },
+          tooltip: { callbacks: { label: (ctx) => `${ctx.dataset.label}: ${ctx.formattedValue}` } }
+        },
+        scales: {
+          x: { stacked: true, ticks: { color: "#c9c9c9" }, grid:{color:"#2a2a2a"} },
+          y: {
+            stacked: true, ticks: { color: "#c9c9c9" },
+            grid:{color:"#2a2a2a"}, suggestedMin: 0, suggestedMax: 1
+          }
+        }
       }
     });
   </script>
