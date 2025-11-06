@@ -3,8 +3,9 @@ import re
 from datetime import datetime, timedelta
 from flask import Flask, render_template, jsonify, request, redirect, url_for
 import praw
-import pandas as pd
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+
+# Local modules
 from ingest import scrape_subreddits, load_cached_df
 from aura import analyze_aura
 from nlp_bert import analyze_emotions
@@ -17,7 +18,7 @@ REDDIT_USER_AGENT = "wellness-tracker-demo"
 # --- APP INIT ---
 app = Flask(__name__)
 analyzer = SentimentIntensityAnalyzer()
-user_posts = {}
+user_posts = {}  # in-memory cache per username
 
 # --- Reddit Init ---
 def init_reddit():
@@ -47,8 +48,8 @@ def fetch_user_submissions(username, limit=100):
         clean_text = preprocess_text(text)
         posts.append({
             "id": s.id,
-            "title": s.title,
-            "created": datetime.utcfromtimestamp(s.created_utc),
+            "title": s.title or "",
+            "created": datetime.utcfromtimestamp(getattr(s, "created_utc", 0) or 0),
             "text": clean_text,
         })
     user_posts[username] = posts
@@ -89,7 +90,9 @@ def get_daily_mood(username, days=60):
     ]
     return trend
 
-# --- ROUTES ---
+# =========================
+# Frontend Pages
+# =========================
 
 @app.route("/")
 def home():
@@ -114,8 +117,8 @@ def patient_detail(author):
     """Detailed page for one patient"""
     df = load_cached_df()
     posts = df[df["author"] == author].to_dict("records")
-    aura = analyze_aura([{"text": p["title"] + " " + p.get("selftext", "")} for p in posts[:30]])
-    emotions = analyze_emotions([{"text": p["title"] + " " + p.get("selftext", "")} for p in posts[:20]])
+    aura = analyze_aura([{"text": (p.get("title","") + " " + p.get("selftext","")).strip()} for p in posts[:30]])
+    emotions = analyze_emotions([{"text": (p.get("title","") + " " + p.get("selftext","")).strip()} for p in posts[:20]])
     return render_template("patient_detail.html", author=author, aura=aura, emotions=emotions)
 
 @app.route("/api/therapist/search")
@@ -135,9 +138,11 @@ def therapist_search():
         .rename(columns={"title": "post_count"})
         .reset_index()
     )
+    # Dummy placeholder dominant emotion
     patients["dominant_emotion"] = [
-        "happy" if i % 3 == 0 else "sad" if i % 3 == 1 else "calm" for i in range(len(patients))
-    ]  # dummy placeholder
+        "happy" if i % 3 == 0 else "sad" if i % 3 == 1 else "calm"
+        for i in range(len(patients))
+    ]
 
     if name_query:
         patients = patients[patients["author"].str.lower().str.contains(name_query)]
@@ -146,6 +151,52 @@ def therapist_search():
 
     result = patients.head(50).to_dict("records")
     return jsonify({"patients": result, "count": len(result)})
+
+# =========================
+# APIs used by dashboard.html
+# =========================
+
+@app.route("/api/fetch/<string:username>")
+def api_fetch(username):
+    """Fetch recent submissions for a username and cache them in memory."""
+    try:
+        posts = fetch_user_submissions(username, limit=200)
+        return jsonify({"ok": True, "fetched": len(posts)})
+    except Exception as e:
+        # Common causes: bad Reddit credentials, non-existent user, rate limit
+        return jsonify({"ok": False, "error": str(e), "fetched": 0}), 500
+
+@app.route("/api/mood_trend/<string:username>")
+def api_mood_trend(username):
+    """Return daily average VADER compound sentiment for the last N days."""
+    try:
+        days = int(request.args.get("days", 60))
+    except Exception:
+        days = 60
+    trend = get_daily_mood(username, days=days) or []
+    return jsonify({"username": username, "trend": trend})
+
+@app.route("/api/aura/<string:username>")
+def api_aura(username):
+    """Return aura for the user's cached posts."""
+    posts = user_posts.get(username, [])
+    payload = [{"text": (p.get("title","") + " " + p.get("text","")).strip()} for p in posts]
+    try:
+        result = analyze_aura(payload)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/emotions/<string:username>")
+def api_emotions(username):
+    """Return aggregated emotion distribution from BERT for the user's cached posts."""
+    posts = user_posts.get(username, [])
+    payload = [{"text": (p.get("title","") + " " + p.get("text","")).strip()} for p in posts[:40]]
+    try:
+        result = analyze_emotions(payload)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 # --- RUN APP ---
 if __name__ == "__main__":

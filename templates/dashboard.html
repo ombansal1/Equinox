@@ -2,6 +2,8 @@
 <html>
 <head>
   <title>Equinox Dashboard - {{username}}</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <style>
     body {
@@ -11,58 +13,26 @@
       margin: 0;
       padding: 0;
     }
-
-    .container {
-      max-width: 1000px;
-      margin: 0 auto;
-      padding: 20px;
-    }
-
-    header {
-      display: flex;
-      align-items: center;
-      gap: 15px;
-      margin-bottom: 25px;
-    }
-
-    header img {
-      width: 55px;
-      height: 55px;
-    }
-
-    header h1 {
-      margin: 0;
-      font-size: 26px;
-      color: #40E0D0;
-    }
-
-    header p {
-      margin: 0;
-      font-size: 14px;
-      color: #A0A0A0;
-    }
+    .container { max-width: 1000px; margin: 0 auto; padding: 20px; }
+    header { display: flex; align-items: center; gap: 15px; margin-bottom: 25px; }
+    header img { width: 55px; height: 55px; }
+    header h1 { margin: 0; font-size: 26px; color: #40E0D0; }
+    header p { margin: 0; font-size: 14px; color: #A0A0A0; }
 
     .aura-card {
       background: radial-gradient(circle at top left, #40e0d0, #1e1e1e);
       border-radius: 15px;
-      padding: 20px;
+      padding: 28px 20px;
       text-align: center;
       margin-bottom: 25px;
       box-shadow: 0 0 15px rgba(64, 224, 208, 0.3);
     }
-
-    .aura-card h2 {
-      color: #40E0D0;
-      margin-bottom: 10px;
-    }
+    .aura-card h2 { color: #ffffff; margin: 0 0 8px; }
+    .aura-card p { margin: 0; color: #cfcfcf; }
 
     .chart-grid {
-      display: flex;
-      flex-wrap: wrap;
-      justify-content: space-between;
-      gap: 20px;
+      display: flex; flex-wrap: wrap; justify-content: space-between; gap: 20px;
     }
-
     .chart-card {
       flex: 1 1 48%;
       background: #1E1E1E;
@@ -70,9 +40,8 @@
       padding: 20px;
       box-shadow: 0 0 10px rgba(64, 224, 208, 0.2);
       text-align: center;
-      min-width: 400px;
+      min-width: 360px;
     }
-
     canvas {
       width: 100% !important;
       height: 280px !important;
@@ -80,14 +49,15 @@
       border-radius: 8px;
       padding: 5px;
     }
-
+    .status {
+      margin-top: 10px;
+      font-size: 13px;
+      color: #9bdad4;
+    }
+    .error { color: #ff9b9b; }
     @media (max-width: 900px) {
-      .chart-card {
-        flex: 1 1 100%;
-      }
-      canvas {
-        height: 260px !important;
-      }
+      .chart-card { flex: 1 1 100%; }
+      canvas { height: 260px !important; }
     }
   </style>
 </head>
@@ -106,6 +76,7 @@
     <div class="aura-card">
       <h2>Your Aura</h2>
       <p id="aura-info">Loading...</p>
+      <div id="aura-status" class="status"></div>
     </div>
 
     <!-- 📈 Charts Grid -->
@@ -114,12 +85,14 @@
       <div class="chart-card">
         <h3>Mood Trend (Last 60 Days)</h3>
         <canvas id="moodChart"></canvas>
+        <div id="mood-status" class="status"></div>
       </div>
 
       <!-- Emotion Radar -->
       <div class="chart-card">
         <h3>Weekly Emotion Distribution</h3>
         <canvas id="emotionRadar"></canvas>
+        <div id="emotion-status" class="status"></div>
       </div>
     </div>
   </div>
@@ -127,108 +100,135 @@
   <script>
     const username = "{{username}}";
 
-    // --- Fetch Aura ---
-    fetch(`/api/aura/${username}`)
-      .then(r => r.json())
-      .then(data => {
-        const auraDiv = document.getElementById("aura-info");
-        if (!data || data.error) {
-          auraDiv.textContent = "Not enough data to determine aura.";
-        } else {
-          auraDiv.innerHTML = `<strong>${data.aura}</strong><br>${data.description}`;
-        }
-      });
-
-    // --- Fetch Mood Trend ---
-    fetch(`/api/fetch/${username}`)
-      .then(r => r.json())
-      .then(fetchData => {
-        if (fetchData.fetched > 0) {
-          return fetch(`/api/mood_trend/${username}?days=60`);
-        } else {
-          throw new Error("No posts fetched for this user.");
-        }
-      })
-      .then(r => r.json())
-      .then(data => {
-        const trend = data.trend || [];
-        if (trend.length === 0) return;
-
-        const labels = trend.map(d => d.date);
-        const values = trend.map(d => d.avg_compound);
-
-        new Chart(document.getElementById("moodChart"), {
-          type: "line",
-          data: {
-            labels: labels,
-            datasets: [{
-              label: "Mood Sentiment (Daily Avg)",
-              data: values,
-              fill: true,
-              borderColor: "#40E0D0",
-              backgroundColor: "rgba(64,224,208,0.15)",
-              tension: 0.25,
-              pointRadius: 3,
-              pointBackgroundColor: "#40E0D0"
-            }]
-          },
-          options: {
-            scales: {
-              y: { min: -1, max: 1, ticks: { color: "#E0E0E0" } },
-              x: { ticks: { color: "#E0E0E0" } }
-            },
-            plugins: { legend: { labels: { color: "#E0E0E0" } } },
-            maintainAspectRatio: false
-          }
-        });
-      });
-
-// --- Fetch Weekly Emotion Distribution ---
-fetch(`/api/emotions/${username}`)
-  .then(r => r.json())
-  .then(data => {
-    if (!data || Object.keys(data).length === 0) return;
-
-    const labels = Object.keys(data);
-    const rawValues = Object.values(data);
-
-    // 🔹 Scale emotion values for better visibility
-    const scaleFactor = 2.5;
-    const values = rawValues.map(v => Math.min(v * scaleFactor, 1));
-
-    new Chart(document.getElementById("emotionRadar"), {
-      type: "radar",
-      data: {
-        labels: labels,
-        datasets: [{
-          label: "Weekly Emotion Intensity",
-          data: values,
-          backgroundColor: "rgba(64,224,208,0.25)",
-          borderColor: "#40E0D0",
-          borderWidth: 2,
-          pointBackgroundColor: "#40E0D0"
-        }]
-      },
-      options: {
-        scales: {
-          r: {
-            min: 0,
-            max: 1,
-            ticks: {
-              display: false // ✅ hides the numeric values like 0.2, 0.4, etc.
-            },
-            pointLabels: { color: "#E0E0E0" },
-            grid: { color: "#333" },
-            angleLines: { color: "#444" }
-          }
-        },
-        plugins: { legend: { labels: { color: "#E0E0E0" } } },
-        maintainAspectRatio: false
+    // Small helper to handle fetch errors nicely
+    async function getJson(url) {
+      const res = await fetch(url);
+      if (!res.ok) {
+        const msg = await res.text().catch(() => res.statusText);
+        throw new Error(`${res.status} ${res.statusText}: ${msg}`);
       }
-    });
-  });
+      return res.json();
+    }
 
+    // --- 1) Fetch & cache posts for the username ---
+    (async () => {
+      const moodStatus = document.getElementById('mood-status');
+      const emotionStatus = document.getElementById('emotion-status');
+      const auraStatus = document.getElementById('aura-status');
 
+      try {
+        const fetched = await getJson(`/api/fetch/${username}`);
+        moodStatus.textContent = `Fetched ${fetched.fetched} posts.`;
+
+        // --- 2) Aura ---
+        try {
+          const aura = await getJson(`/api/aura/${username}`);
+          const auraDiv = document.getElementById("aura-info");
+          if (aura.error) throw new Error(aura.error);
+          auraDiv.innerHTML = `<strong>${aura.aura}</strong><br>${aura.description}`;
+          auraStatus.textContent = 'Aura loaded.';
+        } catch (e) {
+          document.getElementById("aura-info").textContent = "Unable to load aura.";
+          auraStatus.textContent = e.message;
+          auraStatus.classList.add('error');
+          console.error('Aura error:', e);
+        }
+
+        // --- 3) Mood Trend ---
+        try {
+          const trendResp = await getJson(`/api/mood_trend/${username}?days=60`);
+          const trend = trendResp.trend || [];
+          if (trend.length === 0) {
+            moodStatus.textContent = 'No recent posts to chart.';
+          } else {
+            const labels = trend.map(d => d.date);
+            const values = trend.map(d => d.avg_compound);
+            new Chart(document.getElementById("moodChart"), {
+              type: "line",
+              data: {
+                labels,
+                datasets: [{
+                  label: "Mood Sentiment (Daily Avg)",
+                  data: values,
+                  fill: true,
+                  borderColor: "#40E0D0",
+                  backgroundColor: "rgba(64,224,208,0.15)",
+                  tension: 0.25,
+                  pointRadius: 3,
+                  pointBackgroundColor: "#40E0D0"
+                }]
+              },
+              options: {
+                scales: {
+                  y: { min: -1, max: 1, ticks: { color: "#E0E0E0" } },
+                  x: { ticks: { color: "#E0E0E0" } }
+                },
+                plugins: { legend: { labels: { color: "#E0E0E0" } } },
+                maintainAspectRatio: false
+              }
+            });
+            moodStatus.textContent = 'Mood trend loaded.';
+          }
+        } catch (e) {
+          moodStatus.textContent = e.message;
+          moodStatus.classList.add('error');
+          console.error('Mood trend error:', e);
+        }
+
+        // --- 4) Emotions ---
+        try {
+          const emo = await getJson(`/api/emotions/${username}`);
+          if (!emo || Object.keys(emo).length === 0) {
+            emotionStatus.textContent = 'No emotion data available.';
+            return;
+          }
+          const labels = Object.keys(emo);
+          const rawValues = Object.values(emo);
+          const scaleFactor = 2.5;
+          const values = rawValues.map(v => Math.min(v * scaleFactor, 1));
+
+          new Chart(document.getElementById("emotionRadar"), {
+            type: "radar",
+            data: {
+              labels,
+              datasets: [{
+                label: "Weekly Emotion Intensity",
+                data: values,
+                backgroundColor: "rgba(64,224,208,0.25)",
+                borderColor: "#40E0D0",
+                borderWidth: 2,
+                pointBackgroundColor: "#40E0D0"
+              }]
+            },
+            options: {
+              scales: {
+                r: {
+                  min: 0, max: 1,
+                  ticks: { display: false },
+                  pointLabels: { color: "#E0E0E0" },
+                  grid: { color: "#333" },
+                  angleLines: { color: "#444" }
+                }
+              },
+              plugins: { legend: { labels: { color: "#E0E0E0" } } },
+              maintainAspectRatio: false
+            }
+          });
+          emotionStatus.textContent = 'Emotion chart loaded.';
+        } catch (e) {
+          emotionStatus.textContent = e.message;
+          emotionStatus.classList.add('error');
+          console.error('Emotion error:', e);
+        }
+
+      } catch (e) {
+        // If fetch bootstrap itself failed (e.g., Reddit creds)
+        const msg = 'Failed fetching posts: ' + e.message;
+        document.getElementById('mood-status').textContent = msg;
+        document.getElementById('mood-status').classList.add('error');
+        console.error(msg);
+      }
+    })();
   </script>
 </body>
 </html>
