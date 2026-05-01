@@ -63,7 +63,7 @@ The platform offers:
 
 ```bash
 # 1️⃣ Clone the repository
-git clone https://github.com/ombansal/equinox.git
+git clone https://github.com/ombansal1/equinox.git
 cd equinox
 
 # 2️⃣ Install dependencies
