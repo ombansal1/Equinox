@@ -167,7 +167,7 @@ REDDIT_USER_AGENT = "Equinox-App-by-Om-Bansal"
 ### 👤 **Author**
 
 **Om Bansal**
-📧 [[ombansal@example.com](mailto:ombansal2109@gmail.com)]
+📧 [[ombansal2109@gmail.com](mailto:ombansal2109@gmail.com)]
 💼 [LinkedIn](https://linkedin.com/in/om~bansal/) | [GitHub](https://github.com/ombansal1)
 
 ---
